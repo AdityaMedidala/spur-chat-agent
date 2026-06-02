@@ -7,7 +7,7 @@ import {
 	addMessage
 } from '$lib/server/db/queries';
 import { generateReply } from '$lib/server/llm';
-import { SESSION_COOKIE } from '$lib/server/session';
+import { SESSION_COOKIE, isValidUUID } from '$lib/server/session';
 import { limiter } from '$lib/server/ratelimit';
 
 const MESSAGE_MAX_LENGTH = 4000;
@@ -79,7 +79,7 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress 
 
 		let sessionId: string;
 
-		if (candidateId && (await conversationExists(candidateId))) {
+		if (candidateId && isValidUUID(candidateId) && (await conversationExists(candidateId))) {
 			sessionId = candidateId;
 		} else {
 			sessionId = await createConversation();
