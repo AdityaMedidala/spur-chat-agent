@@ -8,6 +8,7 @@ import {
 } from '$lib/server/db/queries';
 import { generateReply } from '$lib/server/llm';
 import { SESSION_COOKIE } from '$lib/server/session';
+import { limiter } from '$lib/server/ratelimit';
 
 const MESSAGE_MAX_LENGTH = 4000;
 
@@ -20,8 +21,23 @@ const COOKIE_OPTIONS = {
 	maxAge: 60 * 60 * 24 * 30 // 30 days
 };
 
-export const POST: RequestHandler = async ({ request, cookies }) => {
+export const POST: RequestHandler = async ({ request, cookies, getClientAddress }) => {
 	try {
+		// ── 0. Rate limiting ─────────────────────────────────────────────────────
+		// Fail open: a Redis error logs server-side but never blocks the request.
+		// The limiter is a no-op when Upstash env vars are absent.
+		try {
+			const { success } = await limiter.limit(getClientAddress());
+			if (!success) {
+				return json(
+					{ error: 'Too many requests. Please slow down and try again in a moment.' },
+					{ status: 429 }
+				);
+			}
+		} catch (err) {
+			console.error('[ratelimit] Redis unreachable, failing open:', err);
+		}
+
 		// ── 1. Parse body ────────────────────────────────────────────────────────
 		let body: unknown;
 		try {

@@ -15,6 +15,7 @@ A minimal AI-powered customer support chat built as part of the Spur founding en
 | Framework | SvelteKit (TypeScript) — single app serving both the UI and all API endpoints |
 | Database | PostgreSQL via [Neon](https://neon.tech), accessed with [Drizzle ORM](https://orm.drizzle.team) |
 | LLM | Anthropic Claude (`claude-sonnet-4-6`) via the official `@anthropic-ai/sdk` |
+| Rate limiting | [Upstash Redis](https://upstash.com) + `@upstash/ratelimit` (optional) |
 | Styling | Tailwind CSS v4 |
 
 ---
@@ -68,14 +69,19 @@ This creates two tables in your Neon database:
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and fill in both values. The `.env` file is gitignored and must never be committed.
+Copy `.env.example` to `.env` and fill in the required values. The `.env` file is gitignored and must never be committed.
 
 ```
-DATABASE_URL=          # Neon HTTP connection string
-ANTHROPIC_API_KEY=     # Anthropic API key (https://console.anthropic.com)
+# Required
+DATABASE_URL=               # Neon HTTP connection string
+ANTHROPIC_API_KEY=          # Anthropic API key (https://console.anthropic.com)
+
+# Optional — rate limiting (app runs fine without these)
+UPSTASH_REDIS_REST_URL=     # Upstash Redis REST URL
+UPSTASH_REDIS_REST_TOKEN=   # Upstash Redis REST token
 ```
 
-Both variables are validated at server startup — the app throws immediately with a clear message if either is missing, rather than failing silently on the first request.
+`DATABASE_URL` and `ANTHROPIC_API_KEY` are validated at server startup — the app throws immediately with a clear message if either is missing. The Upstash variables are optional; if absent the rate limiter is replaced with a no-op and all requests proceed normally.
 
 ---
 
@@ -100,6 +106,8 @@ src/
     └── server/                   # Server-only — never bundled to the client
         ├── llm.ts                # generateReply(history, userMessage) → string
         ├── session.ts            # Shared SESSION_COOKIE constant
+        ├── ratelimit.ts          # Upstash sliding-window limiter, or no-op if
+        │                         # env vars are absent
         └── db/
             ├── client.ts         # Drizzle + Neon HTTP client
             ├── schema.ts         # Table definitions and inferred types
@@ -137,6 +145,7 @@ src/
 - **User message persisted before LLM call** — if the LLM fails, the user's message is still recorded and a friendly error reply is returned. No silent data loss on failure.
 - **New Chat** calls `POST /chat/new` server-side to delete the session cookie before clearing local state, so a page reload after New Chat correctly shows an empty conversation.
 - **Unexpected server errors** are caught by a top-level try/catch in each route handler and returned as a clean JSON 500 — no stack traces reach the client.
+- **Rate limiting** on `POST /chat/message` uses Upstash Redis sliding window (10 requests / 10 s per IP). The limiter is **fail-open**: if Redis is unreachable the error is logged and the request proceeds. If the Upstash env vars are not set, the limiter is a no-op and all requests are allowed through — the app is fully functional without Redis configured.
 
 ---
 
@@ -148,8 +157,8 @@ Chose simple `POST → JSON` over SSE token streaming. It maps cleanly to the pe
 **Authentication**
 Sessions are anonymous cookies. For a real product you'd want user identity so conversation history persists across devices and can be scoped to a customer account.
 
-**Redis caching / rate limiting**
-Each request re-queries the DB to validate the session ID. A Redis cache would eliminate that round-trip. Redis would also be the natural layer for per-session rate limiting before requests reach the LLM.
+**Redis session cache**
+Each request re-queries the DB to validate the session ID. A Redis cache in front of `conversationExists` would eliminate that round-trip for active sessions.
 
 **FAQ retrieval vs. prompt injection**
 Store knowledge is hardcoded in the system prompt. For a larger or frequently-changing knowledge base, a retrieval step (embeddings + vector search) would keep the prompt concise and let the knowledge be updated without redeployment.
