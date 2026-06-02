@@ -114,6 +114,57 @@ src/
             └── queries.ts        # createConversation, getMessages, addMessage, …
 ```
 
+### Request flow
+
+```mermaid
+graph TD
+    Browser["Browser"]
+
+    subgraph upstash["Upstash Redis  —  optional"]
+        RL["Sliding-window rate limiter<br/>fail-open if absent or unreachable"]
+    end
+
+    subgraph routes["SvelteKit Routes"]
+        MSG["POST chat-message"]
+        LOAD["Page load function"]
+        NEW["POST chat-new"]
+    end
+
+    subgraph logic["Server Logic"]
+        VAL["Validate and truncate input<br/>Resolve or create session"]
+        LLM["generateReply<br/>Build context window and map roles"]
+    end
+
+    subgraph db["Neon Postgres  —  Drizzle ORM"]
+        PU["Persist user message"]
+        PF["Fetch history for context"]
+        PA["Persist AI reply"]
+        PFL["Fetch history for page load"]
+    end
+
+    ANT["Anthropic Claude API"]
+
+    Browser -->|"send message"| MSG
+    Browser -->|"page load"| LOAD
+    Browser -->|"new chat"| NEW
+
+    MSG --> RL
+    RL -->|"429 rate limited"| Browser
+    RL -->|"allowed"| VAL
+    VAL --> PU
+    PU --> PF
+    PF --> LLM
+    LLM -->|"message history"| ANT
+    ANT -->|"reply text"| LLM
+    LLM --> PA
+    PA -->|"reply and sessionId"| Browser
+
+    LOAD -->|"read session cookie"| PFL
+    PFL -->|"initial messages"| Browser
+
+    NEW -->|"cookie deleted"| Browser
+```
+
 **Separation of concerns:** routes handle HTTP concerns (parsing, cookies, status codes), `lib/server/llm.ts` owns everything LLM-related, and `lib/server/db/` owns all database access. Neither the LLM layer nor the DB layer knows about each other — the route calls both and assembles the response.
 
 **Plugging in additional channels (WhatsApp, Instagram, etc.):** `generateReply` and the DB helpers are channel-agnostic. Adding a WhatsApp webhook means creating a new route that validates the inbound payload, maps it to `{ sender, text }`, and calls the same `generateReply` + `addMessage` functions. The LLM and DB layers need no changes.
