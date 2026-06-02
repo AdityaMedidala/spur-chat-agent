@@ -1,0 +1,83 @@
+@import 'tailwindcss';
+
+/* ── Typing indicator ─────────────────────────────────────────────────────── */
+@keyframes typing-bounce {
+	0%,
+	100% {
+		transform: translateY(0);
+		opacity: 0.35;
+	}
+	50% {
+		transform: translateY(-5px);
+		opacity: 1;
+	}
+}
+
+/* ── AI message markdown ──────────────────────────────────────────────────── */
+/* Scoped to .ai-prose so these never bleed into the rest of the UI.         */
+.ai-prose p {
+	margin-bottom: 0.6em;
+}
+.ai-prose p:last-child {
+	margin-bottom: 0;
+}
+.ai-prose ul {
+	list-style: disc;
+	padding-left: 1.25em;
+	margin-bottom: 0.6em;
+}
+.ai-prose ol {
+	list-style: decimal;
+	padding-left: 1.25em;
+	margin-bottom: 0.6em;
+}
+.ai-prose li {
+	margin-bottom: 0.2em;
+}
+.ai-prose h1,
+.ai-prose h2,
+.ai-prose h3 {
+	font-weight: 600;
+	margin-top: 0.75em;
+	margin-bottom: 0.35em;
+}
+.ai-prose h1 { font-size: 1em; }
+.ai-prose h2 { font-size: 0.95em; }
+.ai-prose h3 { font-size: 0.9em; }
+.ai-prose code {
+	font-family: ui-monospace, monospace;
+	font-size: 0.8em;
+	background: rgb(0 0 0 / 0.3);
+	border: 1px solid rgb(255 255 255 / 0.12);
+	padding: 0.1em 0.35em;
+	border-radius: 4px;
+}
+.ai-prose pre {
+	background: rgb(0 0 0 / 0.4);
+	border: 1px solid rgb(255 255 255 / 0.1);
+	border-radius: 8px;
+	padding: 0.75em 1em;
+	overflow-x: auto;
+	margin-bottom: 0.6em;
+}
+.ai-prose pre code {
+	background: none;
+	border: none;
+	padding: 0;
+	font-size: 0.8em;
+}
+.ai-prose a {
+	color: #67e8f9;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.ai-prose strong {
+	font-weight: 600;
+	color: #e2e8f0;
+}
+.ai-prose blockquote {
+	border-left: 3px solid rgb(103 232 249 / 0.4);
+	padding-left: 0.75em;
+	color: rgb(226 232 240 / 0.7);
+	margin-bottom: 0.6em;
+}
