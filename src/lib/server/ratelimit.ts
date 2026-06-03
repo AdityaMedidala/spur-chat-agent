@@ -34,14 +34,14 @@ function buildLimiter(): Limiter {
 	// Sliding (vs. fixed) window prevents a burst at the boundary of two windows.
 	const instance = new Ratelimit({
 		redis,
-		limiter: Ratelimit.fixedWindow(3, '10 s'),
+		limiter: Ratelimit.slidingWindow(10, '10 s'),
 		analytics: false,
 		prefix: 'spur:rl'
 	});
 
 	// This log confirms the module was (re-)evaluated and which window is active.
 	// Remove after confirming 429 behaviour works in production.
-	console.log('[ratelimit] Redis limiter initialised — fixedWindow(3, "10 s")');
+	console.log('[ratelimit] Redis limiter initialised — slidingWindow(10, "10 s")');
 
 	return instance;
 }
