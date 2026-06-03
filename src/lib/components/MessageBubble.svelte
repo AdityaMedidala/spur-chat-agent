@@ -17,6 +17,7 @@
 			class="max-w-[75%] px-4 py-3 rounded-3xl rounded-br-sm
 			       bg-gradient-to-br from-blue-500 to-cyan-500
 			       text-white text-sm leading-relaxed shadow-md"
+			style="animation: bubble-pop 200ms cubic-bezier(0.34, 1.56, 0.64, 1) both;"
 		>
 			{text}
 		</div>

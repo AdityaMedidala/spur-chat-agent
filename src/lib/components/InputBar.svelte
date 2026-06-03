@@ -42,7 +42,8 @@
 	class="flex items-end gap-2 px-3 py-2.5
 	       bg-stone-800/70 border border-white/10
 	       rounded-2xl backdrop-blur-sm
-	       focus-within:border-cyan-500/40 transition-colors duration-150"
+	       focus-within:border-cyan-500/40 focus-within:shadow-[0_0_0_3px_rgb(6_182_212/0.10)]
+	       transition-[border-color,box-shadow] duration-150"
 >
 	<textarea
 		bind:this={textareaEl}
@@ -62,9 +63,9 @@
 		disabled={!canSend}
 		aria-label="Send message"
 		class="flex-none w-8 h-8 flex items-center justify-center rounded-xl
-		       transition-colors duration-150
+		       transition duration-150
 		       {canSend
-			? 'bg-cyan-500 hover:bg-cyan-400 text-stone-900 cursor-pointer'
+			? 'bg-cyan-500 hover:bg-cyan-400 hover:scale-105 active:scale-95 text-stone-900 cursor-pointer'
 			: 'bg-white/5 text-stone-600 cursor-not-allowed'}"
 	>
 		<svg

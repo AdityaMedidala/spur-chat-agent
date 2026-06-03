@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import { untrack } from 'svelte';
-	import { fly } from 'svelte/transition';
+	import { fly, fade } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import MessageBubble from '$lib/components/MessageBubble.svelte';
 	import TypingIndicator from '$lib/components/TypingIndicator.svelte';
@@ -97,9 +97,13 @@
 </svelte:head>
 
 <!-- Single cohesive surface: one dark background, no panels or shadows. -->
-<!-- Structure: pinned header → scrolling message area → pinned input bar. -->
+<!-- Structure: top accent → pinned header → scrolling message area → pinned input bar. -->
 <!-- Content inside each full-width bar is constrained to max-w-3xl.       -->
 <div class="flex flex-col h-dvh bg-[#1b1916] text-stone-100">
+
+	<!-- ── Top accent line ──────────────────────────────────────────────────── -->
+	<!-- Single restrained accent: a 1px gradient at the very top of the page. -->
+	<div class="h-px flex-none bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent"></div>
 
 	<!-- ── Header bar ────────────────────────────────────────────────────────── -->
 	<header class="flex-none border-b border-white/[0.07]">
@@ -148,11 +152,13 @@
 
 			{#if messages.length === 0 && !loading}
 				<!-- Empty state: anchored slightly above centre via top padding. -->
+				<!-- Each child animates in staggered (0 / 80 / 160 ms) via CSS.  -->
 				<div class="flex flex-col items-center gap-4 text-center pt-[15vh] sm:pt-[20vh] pb-8">
 					<div
 						class="w-10 h-10 rounded-2xl
 						       bg-gradient-to-br from-cyan-500/20 to-blue-600/20
 						       border border-cyan-500/25 flex items-center justify-center"
+						style="animation: fade-slide-up 0.38s ease both, logo-pulse 3s ease-in-out 0.5s infinite;"
 					>
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
@@ -168,21 +174,24 @@
 							<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
 						</svg>
 					</div>
-					<div>
+					<div style="animation: fade-slide-up 0.38s 80ms ease both; opacity: 0;">
 						<p class="text-sm font-medium text-stone-200 mb-1">Hi, I'm Aria</p>
 						<p class="text-xs text-stone-500 max-w-[20rem]">
 							Your Maple &amp; Co. support agent. Ask me anything about
 							orders, shipping, or returns.
 						</p>
 					</div>
-					<div class="flex flex-wrap justify-center gap-2 max-w-xs sm:max-w-sm">
+					<div
+						class="flex flex-wrap justify-center gap-2 max-w-xs sm:max-w-sm"
+						style="animation: fade-slide-up 0.38s 160ms ease both; opacity: 0;"
+					>
 						{#each SUGGESTED_PROMPTS as prompt (prompt)}
 							<button
 								onclick={() => fillPrompt(prompt)}
 								class="text-xs px-3 py-1.5 rounded-full leading-snug
 								       border border-stone-700 text-stone-400
 								       hover:border-cyan-500/50 hover:text-stone-200 hover:bg-cyan-500/5
-								       transition-colors duration-150"
+								       hover:-translate-y-px transition duration-150"
 							>
 								{prompt}
 							</button>
@@ -192,13 +201,25 @@
 			{:else}
 				<div class="flex flex-col gap-3 py-6">
 					{#each messages as msg (msg.id)}
-						<div in:fly={{ y: 8, duration: 250, easing: cubicOut }}>
-							<MessageBubble sender={msg.sender} text={msg.text} />
-						</div>
+						<!-- User bubbles: fly up + scale spring (scale handled in MessageBubble). -->
+						<!-- AI replies: gentler fade-in to contrast with the typing indicator swap. -->
+						{#if msg.sender === 'user'}
+							<div in:fly={{ y: 6, duration: 200, easing: cubicOut }}>
+								<MessageBubble sender={msg.sender} text={msg.text} />
+							</div>
+						{:else}
+							<div in:fade={{ duration: 280 }}>
+								<MessageBubble sender={msg.sender} text={msg.text} />
+							</div>
+						{/if}
 					{/each}
 
 					{#if loading}
-						<div in:fly={{ y: 8, duration: 200, easing: cubicOut }}>
+						<!-- out:fade ensures a smooth handoff when the AI reply arrives. -->
+						<div
+							in:fly={{ y: 8, duration: 200, easing: cubicOut }}
+							out:fade={{ duration: 150 }}
+						>
 							<TypingIndicator />
 						</div>
 					{/if}
