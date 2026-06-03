@@ -27,8 +27,15 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress 
 		// Fail open: a Redis error logs server-side but never blocks the request.
 		// The limiter is a no-op when Upstash env vars are absent.
 		try {
-			const { success } = await limiter.limit(getClientAddress());
-			if (!success) {
+			const ip = getClientAddress();
+			const result = await limiter.limit(ip);
+			// TODO: remove this log once 429 behaviour is confirmed in testing
+			console.log(
+				'[ratelimit] key=%s full=%s',
+				ip,
+				JSON.stringify(result, (_, v) => (v instanceof Promise ? '[Promise]' : v))
+			);
+			if (!result.success) {
 				return json(
 					{ error: 'Too many requests. Please slow down and try again in a moment.' },
 					{ status: 429 }
