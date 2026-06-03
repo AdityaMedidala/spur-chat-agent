@@ -9,7 +9,7 @@
 
 	let { data }: { data: PageData } = $props();
 
-	type Message = { id: string; sender: 'user' | 'ai'; text: string };
+	type Message = { id: string; sender: 'user' | 'ai'; text: string; isError?: boolean };
 
 	// untrack: read initial server data once without registering a reactive
 	// dependency on `data`. These are independently managed after mount, so
@@ -17,6 +17,9 @@
 	let messages: Message[] = $state(untrack(() => (data.messages as Message[]) ?? []));
 	let sessionId: string | null = $state(untrack(() => data.sessionId ?? null));
 	let loading = $state(false);
+	// null   → not streaming (show typing indicator when loading)
+	// string → streaming in progress (show live bubble)
+	let streamingText = $state<string | null>(null);
 	let inputValue = $state('');
 
 	let bottomEl: HTMLDivElement;
@@ -24,7 +27,10 @@
 	$effect(() => {
 		void messages.length;
 		void loading;
-		bottomEl?.scrollIntoView({ behavior: 'smooth' });
+		void streamingText;
+		// Use instant scroll during streaming so it keeps up with new tokens;
+		// smooth scroll for all other state changes.
+		bottomEl?.scrollIntoView({ behavior: streamingText !== null ? 'instant' : 'smooth' });
 	});
 
 	async function send(text: string) {
@@ -38,33 +44,106 @@
 				body: JSON.stringify({ message: text, sessionId })
 			});
 
-			const json = await res.json();
-
 			if (!res.ok) {
+				// Non-2xx responses (rate limit, validation, 500) return JSON.
+				let errorText = 'Something went wrong. Please try again.';
+				try {
+					const j = await res.json();
+					errorText = j.error ?? errorText;
+				} catch { /* keep default */ }
 				messages = [
 					...messages,
-					{
-						id: crypto.randomUUID(),
-						sender: 'ai',
-						text: json.error ?? 'Something went wrong. Please try again.'
-					}
+					{ id: crypto.randomUUID(), sender: 'ai', text: errorText, isError: true }
 				];
-			} else {
-				sessionId = json.sessionId;
-				messages = [...messages, { id: crypto.randomUUID(), sender: 'ai', text: json.reply }];
+				return;
+			}
+
+			// 200 → SSE stream. Read token-by-token, accumulate into streamingText.
+			const reader = res.body!.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+
+			outer: while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				// SSE events are separated by double newline.
+				const parts = buffer.split('\n\n');
+				buffer = parts.pop()!; // last slice may be incomplete
+				for (const part of parts) {
+					const line = part.trim();
+					if (!line.startsWith('data: ')) continue;
+					let event: {
+						type: string;
+						text?: string;
+						html?: string;
+						sessionId?: string;
+						message?: string;
+					};
+					try {
+						event = JSON.parse(line.slice(6));
+					} catch {
+						continue;
+					}
+
+					if (event.type === 'token') {
+						streamingText = (streamingText ?? '') + (event.text ?? '');
+					} else if (event.type === 'done') {
+						// Swap streaming bubble for final rendered HTML.
+						sessionId = event.sessionId ?? sessionId;
+						messages = [
+							...messages,
+							{ id: crypto.randomUUID(), sender: 'ai', text: event.html ?? '' }
+						];
+						streamingText = null;
+						break outer;
+					} else if (event.type === 'error') {
+						messages = [
+							...messages,
+							{
+								id: crypto.randomUUID(),
+								sender: 'ai',
+								text:
+									event.message ?? 'Something went wrong. Please try again.',
+								isError: true
+							}
+						];
+						streamingText = null;
+						break outer;
+					}
+				}
 			}
 		} catch {
+			streamingText = null;
 			messages = [
 				...messages,
 				{
 					id: crypto.randomUUID(),
 					sender: 'ai',
-					text: "I couldn't reach the server. Please check your connection and try again."
+					text: "I couldn't reach the server. Please check your connection and try again.",
+					isError: true
 				}
 			];
 		} finally {
 			loading = false;
+			streamingText = null;
 		}
+	}
+
+	async function retry(errorId: string) {
+		if (loading) return;
+		const errorIdx = messages.findIndex((m) => m.id === errorId);
+		if (errorIdx === -1) return;
+		// Find the user message immediately preceding this error.
+		let lastUserIdx = -1;
+		for (let i = errorIdx - 1; i >= 0; i--) {
+			if (messages[i].sender === 'user') { lastUserIdx = i; break; }
+		}
+		if (lastUserIdx === -1) return;
+		const textToRetry = messages[lastUserIdx].text;
+		// Drop both the error and the preceding user turn; send() re-adds the user message.
+		messages = messages.filter((_, i) => i !== errorIdx && i !== lastUserIdx);
+		await send(textToRetry);
 	}
 
 	async function startNewChat() {
@@ -199,7 +278,8 @@
 					</div>
 				</div>
 			{:else}
-				<div class="flex flex-col gap-3 py-6">
+				<!-- role="log" implies aria-live="polite"; screen readers announce new entries. -->
+				<div class="flex flex-col gap-3 py-6" role="log" aria-live="polite" aria-label="Conversation">
 					{#each messages as msg (msg.id)}
 						<!-- User bubbles: fly up + scale spring (scale handled in MessageBubble). -->
 						<!-- AI replies: gentler fade-in to contrast with the typing indicator swap. -->
@@ -209,18 +289,55 @@
 							</div>
 						{:else}
 							<div in:fade={{ duration: 280 }}>
-								<MessageBubble sender={msg.sender} text={msg.text} />
+								<MessageBubble sender={msg.sender} text={msg.text} isError={msg.isError} />
+								{#if msg.isError && !loading}
+									<!-- Retry button: always visible on error, hidden while a request is in flight. -->
+									<div class="mt-1.5 ml-1">
+										<button
+											onclick={() => retry(msg.id)}
+											class="flex items-center gap-1 text-xs text-stone-500
+											       hover:text-stone-300 transition-colors duration-150"
+										>
+											<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+												<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+												<path d="M3 3v5h5"/>
+											</svg>
+											Retry
+										</button>
+									</div>
+								{/if}
 							</div>
 						{/if}
 					{/each}
 
-					{#if loading}
-						<!-- out:fade ensures a smooth handoff when the AI reply arrives. -->
+					<!-- Typing indicator: shown until the first token arrives. -->
+					{#if loading && streamingText === null}
 						<div
 							in:fly={{ y: 8, duration: 200, easing: cubicOut }}
 							out:fade={{ duration: 150 }}
 						>
 							<TypingIndicator />
+						</div>
+					{/if}
+
+					<!-- Streaming bubble: live text with blinking cursor.              -->
+					<!-- Fades out as the final rendered-HTML bubble fades in on 'done'. -->
+					{#if streamingText !== null}
+						<div
+							in:fade={{ duration: 120 }}
+							out:fade={{ duration: 150 }}
+							class="flex justify-start"
+						>
+							<div
+								class="max-w-[75%] px-4 py-3 rounded-3xl rounded-bl-sm
+								       bg-stone-800/90 border border-white/[0.08] border-l-2 border-l-cyan-500/50
+								       text-stone-100 text-sm leading-relaxed whitespace-pre-wrap"
+							>
+								{streamingText}<span
+									class="inline-block w-px h-3.5 ml-0.5 bg-cyan-400 align-middle"
+									style="animation: cursor-blink 1s step-end infinite;"
+								></span>
+							</div>
 						</div>
 					{/if}
 				</div>

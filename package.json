@@ -28,11 +28,13 @@
 		"@neondatabase/serverless": "^1.1.0",
 		"@tailwindcss/vite": "^4.3.0",
 		"@types/dompurify": "^3.0.5",
+		"@types/sanitize-html": "^2.16.1",
 		"@upstash/ratelimit": "^2.0.8",
 		"@upstash/redis": "^1.38.0",
 		"dompurify": "^3.4.7",
 		"drizzle-orm": "^0.45.2",
 		"marked": "^18.0.4",
+		"sanitize-html": "^2.17.4",
 		"tailwindcss": "^4.3.0"
 	}
 }

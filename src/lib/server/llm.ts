@@ -90,6 +90,50 @@ const FALLBACK =
 	"I'm sorry, I'm having trouble responding right now. Please try again in a moment, " +
 	"or email us at support@mapleandco.com and we'll get back to you shortly.";
 
+/**
+ * Streams the LLM reply token-by-token as an async generator.
+ * Yields raw text chunks as they arrive from the Anthropic API.
+ * Throws on any API error (with server-side logging) so callers can
+ * emit an SSE error event without persisting incomplete content.
+ */
+export async function* streamReply(
+	history: HistoryItem[],
+	userMessage: string
+): AsyncGenerator<string> {
+	const params = buildMessages(history, userMessage);
+
+	try {
+		const stream = client.messages.stream({
+			model: MODEL,
+			max_tokens: MAX_TOKENS,
+			system: SYSTEM_PROMPT,
+			messages: params
+		});
+
+		for await (const event of stream) {
+			if (
+				event.type === 'content_block_delta' &&
+				event.delta.type === 'text_delta'
+			) {
+				yield event.delta.text;
+			}
+		}
+	} catch (err) {
+		if (err instanceof Anthropic.APIConnectionTimeoutError) {
+			console.error('[llm/stream] Timeout after 20 s');
+		} else if (err instanceof Anthropic.RateLimitError) {
+			console.error('[llm/stream] Rate limited:', err.status);
+		} else if (err instanceof Anthropic.AuthenticationError) {
+			console.error('[llm/stream] Bad API key — check ANTHROPIC_API_KEY');
+		} else if (err instanceof Anthropic.APIError) {
+			console.error('[llm/stream] API error:', err.status, err.message);
+		} else {
+			console.error('[llm/stream] Unexpected error:', err);
+		}
+		throw err; // re-throw so the SSE route handler emits an error event
+	}
+}
+
 export async function generateReply(
 	history: HistoryItem[],
 	userMessage: string

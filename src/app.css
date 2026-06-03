@@ -31,6 +31,12 @@
 	to   { transform: scale(1); }
 }
 
+/* ── Streaming cursor blink ───────────────────────────────────────────────── */
+@keyframes cursor-blink {
+	0%, 100% { opacity: 1; }
+	50%       { opacity: 0; }
+}
+
 /* ── Reduced motion ───────────────────────────────────────────────────────── */
 /* Disables all CSS animations and transitions for users who prefer it.       */
 @media (prefers-reduced-motion: reduce) {

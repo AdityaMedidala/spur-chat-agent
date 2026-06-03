@@ -151,7 +151,7 @@ graph TD
 
 - **Streaming** — chose `POST → JSON` for simplicity; SSE token streaming is the obvious next step for perceived latency
 - **Auth** — anonymous cookies; a real product needs user identity for cross-device history
-- **Redis session cache** — each request re-queries the DB to validate the session; a cache in front of `conversationExists` would cut that round-trip
+- **Redis session cache** — each request validates the session ID with a DB query; a Redis cache in front of `conversationExists` would cut that round-trip (separate from the Upstash rate-limiting Redis that is already in place)
 - **FAQ retrieval** — knowledge is hardcoded in the prompt; a vector search step would handle a larger or frequently-changing knowledge base without redeployment
-- **UI polish** — missing timestamps, copy-to-clipboard, retry button, accessibility audit
+- **UI polish** — missing timestamps, accessibility audit
 - **Tests** — none; priority would be `buildMessages` role-alternation edge cases, `generateReply` error branches, and route input validation

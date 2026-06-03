@@ -6,20 +6,26 @@ import {
 	getMessages,
 	addMessage
 } from '$lib/server/db/queries';
-import { generateReply } from '$lib/server/llm';
+import { streamReply } from '$lib/server/llm';
+import { renderAiReply } from '$lib/server/sanitize';
 import { SESSION_COOKIE, isValidUUID } from '$lib/server/session';
 import { limiter } from '$lib/server/ratelimit';
 
 const MESSAGE_MAX_LENGTH = 4000;
 
-// Cookie options — httpOnly prevents JS access; SameSite=strict is sufficient
-// since we have no cross-origin POST flows.
-const COOKIE_OPTIONS = {
-	path: '/',
-	httpOnly: true,
-	sameSite: 'strict' as const,
-	maxAge: 60 * 60 * 24 * 30 // 30 days
-};
+// Cookie options — matches COOKIE_OPTIONS used previously, but we construct
+// the Set-Cookie header manually to support streaming (raw Response) responses.
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days in seconds
+
+function sessionCookieHeader(sessionId: string): string {
+	return `${SESSION_COOKIE}=${sessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${COOKIE_MAX_AGE}`;
+}
+
+// SSE helper — encodes one event as UTF-8 bytes.
+const encoder = new TextEncoder();
+function sseEvent(data: object): Uint8Array {
+	return encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
+}
 
 export const POST: RequestHandler = async ({ request, cookies, getClientAddress }) => {
 	try {
@@ -91,28 +97,59 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress 
 		// of what the user asked.
 		await addMessage(sessionId, 'user', message);
 
-		// ── 5. Fetch history and generate reply ──────────────────────────────────
-		// getMessages returns rows ordered oldest-first; map to HistoryItem shape.
-		// We exclude the message we just inserted — generateReply receives it as
-		// the separate `userMessage` argument, not inside `history`, so it isn't
-		// double-counted.
+		// ── 5. Fetch history for context ─────────────────────────────────────────
 		const rows = await getMessages(sessionId);
 		const history = rows
 			.slice(0, -1) // drop the user message we just persisted
 			.map((r) => ({ sender: r.sender, text: r.text }));
 
-		// generateReply never throws — returns a friendly string on any error.
-		const reply = await generateReply(history, message);
+		// ── 6. Stream LLM reply via SSE ──────────────────────────────────────────
+		// We know the sessionId before streaming starts, so the Set-Cookie header
+		// can be sent upfront with the response headers (before any body bytes).
+		const body_ = new ReadableStream<Uint8Array>({
+			async start(controller) {
+				let fullText = '';
 
-		// ── 6. Persist AI reply ──────────────────────────────────────────────────
-		await addMessage(sessionId, 'ai', reply);
+				try {
+					for await (const chunk of streamReply(history, message)) {
+						fullText += chunk;
+						controller.enqueue(sseEvent({ type: 'token', text: chunk }));
+					}
 
-		// ── 7. Set cookie and respond ────────────────────────────────────────────
-		cookies.set(SESSION_COOKIE, sessionId, COOKIE_OPTIONS);
+					// Stream completed successfully — sanitize, persist, respond.
+					const html = renderAiReply(fullText);
+					await addMessage(sessionId, 'ai', html);
+					controller.enqueue(sseEvent({ type: 'done', html, sessionId }));
+				} catch (err) {
+					// Mid-stream LLM error. We do NOT persist incomplete content.
+					// streamReply already logged the specific error type.
+					console.error('[POST /chat/message] Stream error:', err);
+					controller.enqueue(
+						sseEvent({
+							type: 'error',
+							message:
+								"I'm sorry, I'm having trouble responding right now. " +
+								'Please try again in a moment, or email us at support@mapleandco.com.'
+						})
+					);
+				} finally {
+					controller.close();
+				}
+			}
+		});
 
-		return json({ reply, sessionId });
+		return new Response(body_, {
+			status: 200,
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				'Connection': 'keep-alive',
+				'X-Accel-Buffering': 'no', // disable nginx buffering on proxied deployments
+				'Set-Cookie': sessionCookieHeader(sessionId)
+			}
+		});
 	} catch (err) {
-		// Outer catch: unexpected errors (DB down, import failure, etc.).
+		// Outer catch: unexpected errors (DB down, session logic, etc.).
 		// Log server-side, never expose internals to the client.
 		console.error('[POST /chat/message] Unexpected error:', err);
 		return json(
