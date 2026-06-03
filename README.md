@@ -1,157 +1,173 @@
-# Spur Take-Home — AI Live Chat Support Agent
+# spur-chat-agent
 
-**Deployed:** https://spur-chat-agent-bice.vercel.app/
+> AI live chat support agent — SvelteKit · Anthropic Claude · Neon Postgres · SSE streaming
 
-Users chat with **Aria**, a support agent for a fictional home-goods store (Maple & Co.). Messages persist to Postgres via a session cookie, so conversations survive page reloads.
+**Live demo:** https://spur-chat-agent-bice.vercel.app/
+
+Chat with **Aria**, a support agent for **Maple & Co.**, a fictional home-goods store. Replies stream token-by-token in real time, persist to Postgres, and survive page reloads — no login required.
 
 ---
 
-## Tech Stack
+## What it does
+
+- **Real-time streaming replies** — responses stream token-by-token via SSE; you see a live cursor as Aria types
+- **Persistent conversations** — a session cookie ties your chat to a DB conversation; reload and your history is there
+- **Retry on failure** — mid-stream errors surface as an error bubble with a one-click retry button
+- **Rate limiting** — sliding-window IP-based limiter (Upstash Redis, optional; degrades gracefully to no-op if absent)
+- **Safe markdown rendering** — AI replies are rendered server-side (marked → sanitize-html allowlist) before being persisted and displayed
+
+---
+
+## Tech stack
 
 | Layer | Choice |
 |---|---|
-| Framework | SvelteKit (TypeScript) |
-| Database | PostgreSQL via [Neon](https://neon.tech) + [Drizzle ORM](https://orm.drizzle.team) |
-| LLM | Anthropic Claude (`claude-sonnet-4-6`) |
-| Rate limiting | [Upstash Redis](https://upstash.com) + `@upstash/ratelimit` (optional) |
+| Framework | SvelteKit 2 — TypeScript, Svelte 5 runes |
+| Database | PostgreSQL via [Neon](https://neon.tech) (HTTP/serverless) + [Drizzle ORM](https://orm.drizzle.team) |
+| LLM | Anthropic Claude `claude-sonnet-4-6` — token streaming via SSE |
+| Rate limiting | [Upstash Redis](https://upstash.com) + `@upstash/ratelimit` — optional |
 | Styling | Tailwind CSS v4 |
+| Deployment | Vercel (`adapter-vercel`) |
 
 ---
 
-## Run Locally
+## Run locally
 
-**Prerequisites:** Node.js ≥ 18, a Neon database, an Anthropic API key.
+**Prerequisites:** Node.js ≥ 18, a [Neon](https://neon.tech) database, an [Anthropic](https://console.anthropic.com) API key.
 
 ```bash
 git clone https://github.com/AdityaMedidala/spur-chat-agent
 cd spur-chat-agent
 npm install
-cp .env.example .env   # fill in DATABASE_URL and ANTHROPIC_API_KEY
-npx drizzle-kit push   # create tables in Neon
-npm run dev
+
+cp .env.example .env
+# open .env and fill in DATABASE_URL and ANTHROPIC_API_KEY
+
+npx drizzle-kit push   # creates the tables in your Neon database
+npm run dev            # starts at http://localhost:5173
 ```
 
-Open [http://localhost:5173](http://localhost:5173).
+> **Neon connection string:** use the **HTTP / serverless** string, not the pooled TCP one. The app uses `@neondatabase/serverless` over HTTP, which is required for Vercel's stateless runtime.
 
 ---
 
-## Database Setup
+## Environment variables
 
-1. Create a free project at [neon.tech](https://neon.tech).
-2. Copy the **HTTP/serverless** connection string (not the pooled TCP one).
-3. Set it as `DATABASE_URL` in `.env`, then run `npx drizzle-kit push`.
-
-Tables created:
-
-| Table | Columns |
-|---|---|
-| `conversations` | `id` (uuid PK), `created_at` |
-| `messages` | `id` (uuid PK), `conversation_id` (FK), `sender` (`user`\|`ai`), `text`, `created_at` |
-
----
-
-## Environment Variables
-
-```
+```bash
 # Required
-DATABASE_URL=               # Neon HTTP connection string
-ANTHROPIC_API_KEY=          # Anthropic API key
+DATABASE_URL=            # Neon HTTP connection string
+ANTHROPIC_API_KEY=       # Anthropic API key
 
-# Optional — rate limiting (app runs fine without these)
+# Optional — app runs fine without these (rate limiter becomes a no-op)
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 ```
 
-`DATABASE_URL` and `ANTHROPIC_API_KEY` are validated at startup — the app throws immediately if either is missing. Upstash vars are optional; if absent, the rate limiter is a no-op.
+`DATABASE_URL` and `ANTHROPIC_API_KEY` are validated at startup — the server throws immediately with a clear message if either is missing. The Upstash variables are optional; if absent, a no-op limiter is used and all requests pass through.
 
 ---
 
 ## Architecture
 
-```mermaid
-graph TD
-    Browser["Browser"]
+### Request flow
 
-    subgraph upstash["Upstash Redis  —  optional"]
-        RL["Sliding-window rate limiter<br/>fail-open if absent or unreachable"]
-    end
-
-    subgraph routes["SvelteKit Routes"]
-        MSG["POST chat-message"]
-        LOAD["Page load function"]
-        NEW["POST chat-new"]
-    end
-
-    subgraph logic["Server Logic"]
-        VAL["Validate and truncate input<br/>Resolve or create session"]
-        LLM["generateReply<br/>Build context window and map roles"]
-    end
-
-    subgraph db["Neon Postgres  —  Drizzle ORM"]
-        PU["Persist user message"]
-        PF["Fetch history for context"]
-        PA["Persist AI reply"]
-        PFL["Fetch history for page load"]
-    end
-
-    ANT["Anthropic Claude API"]
-
-    Browser -->|"send message"| MSG
-    Browser -->|"page load"| LOAD
-    Browser -->|"new chat"| NEW
-
-    MSG --> RL
-    RL -->|"429 rate limited"| Browser
-    RL -->|"allowed"| VAL
-    VAL --> PU
-    PU --> PF
-    PF --> LLM
-    LLM -->|"message history"| ANT
-    ANT -->|"reply text"| LLM
-    LLM --> PA
-    PA -->|"reply and sessionId"| Browser
-
-    LOAD -->|"read session cookie"| PFL
-    PFL -->|"initial messages"| Browser
-
-    NEW -->|"cookie deleted"| Browser
+```
+Browser
+  │
+  ├─ POST /chat/message ──────────────────────────────────────────────────
+  │     │
+  │     ├─ [Upstash Redis] sliding-window rate limit  ← fail-open if absent
+  │     ├─ validate & truncate input (400 on bad/empty message)
+  │     ├─ resolve or create conversation  (UUID cookie ↔ Neon DB)
+  │     ├─ persist user message to DB
+  │     ├─ fetch last 10 messages for LLM context
+  │     │
+  │     ├─ streamReply() ─→ Anthropic API (Claude streaming)
+  │     │       content_block_delta events
+  │     │          │
+  │     │          └─→  SSE token events  ──────────────────→  Browser
+  │     │                                                    (live cursor)
+  │     │
+  │     ├─ accumulate full text → marked → sanitize-html
+  │     ├─ persist sanitized AI reply to DB
+  │     └─ SSE done event { html, sessionId } ────────────→  Browser
+  │                                                        (swap to final bubble)
+  │
+  ├─ GET /  (page load) ──────────────────────────────────────────────────
+  │     └─ read session cookie → fetch conversation history → SSR
+  │
+  └─ POST /chat/new ──────────────────────────────────────────────────────
+        └─ delete session cookie (server-side)
 ```
 
-**Layers:**
-- `routes/` — HTTP concerns: parsing, cookies, status codes
-- `lib/server/llm.ts` — LLM call, role alternation, error handling
-- `lib/server/db/` — all database access (Drizzle queries)
+### Layer separation
 
-`generateReply` and the DB helpers are channel-agnostic — adding a WhatsApp webhook means a new route calling the same functions; the LLM and DB layers need no changes.
+```
+src/
+├── routes/
+│   ├── +page.svelte             # UI, SSE reader, streaming state machine
+│   ├── +page.server.ts          # session resolution, history load (SSR)
+│   └── chat/
+│       ├── message/+server.ts   # POST: rate limit → validate → stream → SSE
+│       └── new/+server.ts       # POST: clear session cookie
+│
+└── lib/server/
+    ├── llm.ts                   # streamReply(), buildMessages(), error handling
+    ├── sanitize.ts              # marked → sanitize-html pipeline
+    ├── ratelimit.ts             # Upstash limiter + no-op fallback
+    ├── session.ts               # cookie name constant + UUID validation
+    └── db/
+        ├── schema.ts            # Drizzle table definitions + inferred types
+        ├── client.ts            # Neon HTTP client (one import, one export)
+        └── queries.ts           # typed query helpers — no HTTP concerns
+```
+
+The LLM and DB layers are channel-agnostic. Adding a WhatsApp or Instagram webhook is a new route that calls the same `streamReply()` and `addMessage()` functions — no changes to the core logic.
 
 ---
 
-## LLM
+## LLM design
 
-- **Model:** `claude-sonnet-4-6`, `max_tokens: 512`
-- **System prompt:** hardcoded with Aria's persona and Maple & Co. FAQ (shipping, returns, support hours) — no retrieval step, low latency
-- **Context window:** last 10 messages; strict role alternation enforced before sending to the API
-- **Errors:** all Anthropic error classes caught, logged server-side, returned as a friendly fallback string — the route never receives a thrown exception
+**Model:** `claude-sonnet-4-6` · `max_tokens: 512`
+
+**Streaming:** `client.messages.stream()` yields `content_block_delta / text_delta` events which are forwarded as SSE `token` events to the browser. The full accumulated text is sanitized and persisted only on stream completion.
+
+**System prompt:** hardcoded Aria persona + Maple & Co. knowledge base (shipping, returns, support hours). No retrieval step — predictable latency, simple to reason about.
+
+**Context window:** last 10 messages sent to the API. `buildMessages()` enforces strict `user / assistant` role alternation — consecutive same-role turns are deduplicated, and trailing `user` turns are trimmed before appending the new message. This prevents Anthropic API errors from malformed history.
+
+**Error handling:** `APIConnectionTimeoutError`, `RateLimitError`, `AuthenticationError`, and `APIError` are each caught and logged server-side with distinct messages. `streamReply()` re-throws so the route emits an SSE `error` event — no raw error details ever reach the browser.
 
 ---
 
 ## Robustness
 
-- Empty or whitespace-only messages → 400 before touching the DB
-- Messages over 4 000 chars → silently truncated, still processed
-- Invalid/stale session IDs → validated as UUID format + checked against DB; creates a new conversation if not found
-- User message persisted **before** the LLM call — no silent data loss on LLM failure
-- New Chat hits `POST /chat/new` to delete the cookie server-side before clearing local state
-- Rate limiting: sliding window, 10 req / 10 s per IP, fail-open (Redis unreachable → request proceeds)
-- Replies stream token-by-token via SSE; the full text is accumulated server-side, sanitized, and persisted only on completion — a mid-stream failure surfaces the friendly error + retry without persisting partial content
-- Top-level try/catch in every route — clean JSON 500, no stack traces to the client
+| Scenario | Behaviour |
+|---|---|
+| Empty / whitespace-only message | 400 before DB or LLM is touched |
+| Message > 4 000 chars | Silently truncated, still processed |
+| Invalid or stale session cookie | UUID-validated then DB-checked; new conversation created if not found |
+| LLM timeout / rate limit / bad key | Friendly error bubble + retry button |
+| Mid-stream LLM failure | SSE `error` event emitted; partial content not persisted |
+| Redis unreachable | Rate limiter fails open; request proceeds normally |
+| Network failure on the client | `fetch` catch block; error bubble + retry |
+| Malformed JSON body | 400 with specific validation message |
+| Unexpected server error | Top-level try/catch; clean JSON 500, no stack trace to client |
 
 ---
 
-## Trade-offs & If I Had More Time
+## Trade-offs & if I had more time
 
-- **Auth** — anonymous cookies; a real product needs user identity for cross-device history
-- **Redis session cache** — each request validates the session ID with a DB query; a Redis cache in front of `conversationExists` would cut that round-trip (separate from the Upstash rate-limiting Redis that is already in place)
-- **FAQ retrieval** — knowledge is hardcoded in the prompt; a vector search step would handle a larger or frequently-changing knowledge base without redeployment
-- **UI polish** — missing timestamps, accessibility audit
-- **Tests** — none; priority would be `buildMessages` role-alternation edge cases, `generateReply` error branches, and route input validation
+**Orphaned user messages** — the user turn is persisted before the LLM call (intentional, so failures are logged). If the stream errors, that row exists without an AI reply and re-appears on reload. Fix: wrap both inserts in a transaction, or persist the user message only alongside the AI reply at stream completion.
+
+**Auth** — conversations are anonymous session cookies. A real product needs user identity for cross-device history and agent handoff context.
+
+**Redis session cache** — every request validates the session ID with a DB round-trip. A Redis cache in front of `conversationExists()` would eliminate that (separate from the Upstash rate-limiting Redis already present).
+
+**FAQ retrieval** — knowledge is hardcoded in the system prompt. A vector store (pgvector + embeddings) would handle a larger or frequently-changing knowledge base without redeployment.
+
+**Progressive markdown rendering** — during streaming, raw token text is displayed (asterisks visible for bold/lists). Running `marked.parse()` on the accumulated text on each token would render markdown progressively.
+
+**SSE utility** — the SSE buffer/parse loop in `+page.svelte` is correct but would be cleaner extracted as a `$lib/sse.ts` async-generator: `async function* readSSE(response)` yielding parsed events.
+
+**Tests** — none shipped; priority targets would be `buildMessages()` role-alternation edge cases, `renderAiReply()` XSS scenarios, and the route's input validation branches.
