@@ -143,13 +143,13 @@ graph TD
 - User message persisted **before** the LLM call — no silent data loss on LLM failure
 - New Chat hits `POST /chat/new` to delete the cookie server-side before clearing local state
 - Rate limiting: sliding window, 10 req / 10 s per IP, fail-open (Redis unreachable → request proceeds)
+- Replies stream token-by-token via SSE; the full text is accumulated server-side, sanitized, and persisted only on completion — a mid-stream failure surfaces the friendly error + retry without persisting partial content
 - Top-level try/catch in every route — clean JSON 500, no stack traces to the client
 
 ---
 
 ## Trade-offs & If I Had More Time
 
-- **Streaming** — chose `POST → JSON` for simplicity; SSE token streaming is the obvious next step for perceived latency
 - **Auth** — anonymous cookies; a real product needs user identity for cross-device history
 - **Redis session cache** — each request validates the session ID with a DB query; a Redis cache in front of `conversationExists` would cut that round-trip (separate from the Upstash rate-limiting Redis that is already in place)
 - **FAQ retrieval** — knowledge is hardcoded in the prompt; a vector search step would handle a larger or frequently-changing knowledge base without redeployment
