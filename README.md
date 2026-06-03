@@ -23,7 +23,7 @@ Users chat with **Aria**, a support agent for a fictional home-goods store (Mapl
 **Prerequisites:** Node.js ≥ 18, a Neon database, an Anthropic API key.
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/AdityaMedidala/spur-chat-agent
 cd spur-chat-agent
 npm install
 cp .env.example .env   # fill in DATABASE_URL and ANTHROPIC_API_KEY
