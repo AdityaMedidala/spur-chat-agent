@@ -1,6 +1,6 @@
 # Spur Take-Home — AI Live Chat Support Agent
 
-**Deployed:** `<YOUR_DEPLOYED_URL_HERE>`
+**Deployed:** `https://spur-chat-agent-bice.vercel.app/`
 
 Users chat with **Aria**, a support agent for a fictional home-goods store (Maple & Co.). Messages persist to Postgres via a session cookie, so conversations survive page reloads.
 
